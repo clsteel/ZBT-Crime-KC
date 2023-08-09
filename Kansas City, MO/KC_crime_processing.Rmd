@@ -1,0 +1,411 @@
+---
+title: "Kansas City Crime Data 2017-2022"
+output: html_notebook
+---
+The files below were retrieved from https://data.kcmo.org/Crime/KCPD-Crime-Data-2019/pxaa-ahcm
+In order to use this notebook ensure that the Crime Data files are in the same directory as this notebook. 
+
+```{r}
+#install.packages('dplyr')
+#install.packages('ggplot2')
+#install.packages('naniar')
+#install.packages('crosstable')
+#install.packages('stringr')
+#install.packages('tidyr')
+```
+```{r}
+library(dplyr)
+library(ggplot2)
+#library(naniar)
+#library(crosstable)
+library(stringr)
+library(tidyr)
+```
+
+```{r}
+setwd('C:/Users/clfairbairn/Projects_Local/ZBT Crime Data/Kansas City, MO')
+kc_2017 <-  read.csv('KCPD_Crime_Data_2017.csv')
+kc_2018 <-  read.csv('KCPD_Crime_Data_2018.csv')
+kc_2019 <-  read.csv('KCPD_Crime_Data_2019.csv')
+kc_2020 <-  read.csv('KCPD_Crime_Data_2020.csv')
+kc_2021 <-  read.csv('KCPD_Crime_Data_2021.csv')
+kc_2022 <-  read.csv('KCPD_Crime_Data_2022.csv')
+```
+
+Exploring the data:
+```{r}
+colnames(kc_2017)
+colnames(kc_2018)
+colnames(kc_2019)
+```
+2019 and 2020 and 2022 are missing the variable 'Invl_No' -- seems like that's the number of people involved in the incident maybe? 
+2021 has a column 'age_range' which again unclear who that refers to. 
+Considerations: race, sex, age are missing for many rows, and it is unclear if the information refers to the victim or the suspect. not consistent if missingness coincides with vic/sus involvement category#
+
+-starting in 2019 report numbers changed to start with 'kc' so dtype changes from int to char. need to change 2017/18 to char type to concatenate datasets
+-also starting in 2019 'offense' changed from some random number to a more descriptive text description of crime type. 
+-also 'beat' changed from int to char type
+-changing all ZIP codes to char
+-renaming some columns to stack correctly
+```{r}
+kc_2017$Report_No <- as.character(kc_2017$Report_No)
+kc_2018$Report_No <- as.character(kc_2018$Report_No)
+
+kc_2017$Offense <- as.character(kc_2017$Offense)
+kc_2018$Offense <- as.character(kc_2018$Offense)
+
+kc_2017$Beat <- as.character(kc_2017$Beat)
+kc_2018$Beat <- as.character(kc_2018$Beat)
+
+kc_2017$Zip.Code <- as.character(kc_2017$Zip.Code)
+kc_2018$Zip.Code <- as.character(kc_2018$Zip.Code)
+kc_2019$Zip.Code <- as.character(kc_2019$Zip.Code)
+kc_2020$Zip.Code <- as.character(kc_2020$Zip.Code)
+
+```
+```{r}
+colnames(kc_2020)[colnames(kc_2020) == 'Reported.Time'] <-  'Reported_Time'
+colnames(kc_2020)[colnames(kc_2020) == 'From.Time'] <-  'From_Time'
+colnames(kc_2020)[colnames(kc_2020) == 'To.Time'] <-  'To_Time'
+colnames(kc_2022)[colnames(kc_2022) == 'Fire.Arm.Used.Flag'] <-  'Firearm.Used.Flag'
+```
+
+stacking all these datasets together to make one large dataframe
+
+```{r}
+all_years <- bind_rows(kc_2017,kc_2018, kc_2019, kc_2020, kc_2021, kc_2022)
+```
+
+creating a year variable out of the reported_date
+```{r}
+all_years <- all_years |> mutate(Reported_Date = as.Date(Reported_Date, format = "%m/%d/%Y"))
+all_years$year <- as.numeric(format(all_years$Reported_Date, '%Y'))
+all_years$month <- as.numeric(format(all_years$Reported_Date, '%m'))
+```
+
+going to try to visualize some of the missingness of the data, so we can see what we're working with
+
+there's a little bit of garbage in here that's from outside our date range for some reason. going to filter out those rows because there are very few of them, and they are irrelevant.
+```{r}
+all_years_clean <- filter(all_years, year >= 2017)
+all_years_clean <- filter(all_years_clean, year <= 2022)
+```
+
+lost about 200 observations from that filter
+
+```{r}
+#gg_miss_var(all_years_clean)
+```
+suspicious lack of missingness in most vars--set empty strings to NA to count actual missing data and also drop some variables that we aren't going to use in analysis  
+
+```{r}
+all_years_clean[all_years_clean == ''] <- NA
+all_years_clean <- subset(all_years_clean, select= -c(Age_Range, Beat, Rep_Dist, From_Time, From_Date, To_Time, To_Date, Invl_No))
+```
+```{r}
+#gg_miss_var(all_years_clean, facet=year)
+```
+Unfortunately the most missing variables are the most important ones: description, location, IBRS
+```{r}
+colSums(is.na(all_years_clean))
+```
+
+let's take a look at duplicates. starting out looking at 'report number'
+
+this is rough! many dupes
+-same date, time, location, same IBRS/description: one row for suspect, one for victim
+-same location, type of infraction: multiple rows for multiple reports of same thing (e.g. i saw a handful of possession/sale/dist of drugs that were at diff locations and on different dates but had same report no--likely same suspect but different encounters?)
+-same date, time, location, multiple suspects/victims
+
+Spoke to Natalie and decided to take a pretty broad approach here: going to condense into one row for every unique date/time/address/report No
+#also will need to remove police stations (many reports just have that address rather than location of incident)
+
+```{r}
+all_years_clean <- all_years_clean %>%
+  distinct(Report_No, Address, Reported_Date, Reported_Time, .keep_all=TRUE)
+all_years_clean$Description <- toupper(all_years_clean$Description)
+```
+```{r}
+sum(duplicated(needs_geocodes$Report_No))
+```
+
+This removed roughly half the dataset which seems pretty good. many dupes were suspect/victim pairs of the same report. 
+
+Looking at some missing data crosstabs
+```{r}
+all_years_clean$missing_IBRS <- ifelse(is.na(all_years_clean$IBRS), TRUE, FALSE)
+all_years_clean$missing_description <- ifelse(is.na(all_years_clean$Description),TRUE,FALSE)
+all_years_clean$missing_location <- ifelse(is.na(all_years_clean$Location),TRUE,FALSE)
+all_years_clean$missing_address <- ifelse(is.na(all_years_clean$Address),TRUE,FALSE)
+all_years_clean$missing_bothIBRSDescription <- ifelse(all_years_clean$missing_IBRS == TRUE & all_years_clean$missing_description, TRUE, FALSE)
+```
+
+
+```{r}
+#crosstable(all_years_clean, (missing_address), by=missing_location)
+```
+
+**33,439 rows have neither IBRS nor description
+1,085 + 10,400 we have one or the other
+```{r}
+length(grep("UNKNOWN", all_years_clean$Address))
+```
+**4 rows have neither location nor address
+29 + 38,153 have one or the other.
+302 have entries of 'unknown' address with no info for ZIP or location. removing.
+```{r}
+all_years_clean <- all_years_clean %>%
+  mutate(Address = coalesce(Address, Location))
+all_years_clean <- all_years_clean[all_years_clean$missing_address != TRUE,]
+```
+```{r}
+all_years_clean <- all_years_clean[-grep('UNKNOWN', all_years_clean$Address),]
+```
+There are also some rows in here that are not located in kansas city. looking at that now:
+```{r}
+cities <- table(all_years_clean$City)
+```
+what the hell did they do here, this is the messiest string column I've ever seen. fixing a ton of spelling errors and removing cities that are outside of the KC 6-county area we usually look at
+
+```{r}
+all_years_clean$City <- str_replace(all_years_clean$City, 'KASNAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, "'",'')
+all_years_clean$City <- str_replace(all_years_clean$City, 'GLADESTONE','GLADSTONE')
+all_years_clean$City <- str_replace(all_years_clean$City, 'INDEP$','INDEPENDENCE')
+all_years_clean$City <- str_replace(all_years_clean$City, 'INDEPENDEANCE','INDEPENDENCE')
+all_years_clean$City <- str_replace(all_years_clean$City, 'INDEPEDENCE','INDEPENDENCE')
+all_years_clean$City <- str_replace(all_years_clean$City, 'INDPENDENCE','INDEPENDENCE')
+all_years_clean$City <- str_replace(all_years_clean$City, 'JEFFERSON CIT','JEFFERSON CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KAMSAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KA NSAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANASA','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSA ','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSAAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CTIY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'SCITY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CIITY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CIRT$','CITY')
+```
+```{r}
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITYY$','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CIRTY$','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITIY$','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITHY$','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITTY$','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITR$','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSAS CITY 6','KANSAS CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSAS CITY M$','KANSAS CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CIY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITYTY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KC','KANSAS CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KCK','KANSAS CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KCMO','KANSAS CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KNSAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KNASAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KKANSAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'LAWERENCE','LAWRENCE')
+all_years_clean$City <- str_replace(all_years_clean$City, 'LEESSUMMIT','LEES SUMMIT')
+all_years_clean$City <- str_replace(all_years_clean$City, 'LEE SUMMIT','LEES SUMMIT')
+all_years_clean$City <- str_replace(all_years_clean$City, '0VERLAND','OVERLAND')
+all_years_clean$City <- str_replace(all_years_clean$City, 'COTU','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CTY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, ' ITY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CTITY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITYT','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITYMO','CITY')
+```
+```{r}
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANNSAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSACITY','KANSAS CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANS ','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CCITY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CIT$','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSAS$','KANSAS CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CIT Y','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITH','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITU','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'COTY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'UNIT','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITYK','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANNSAS','KANSAS')
+```
+```{r}
+all_years_clean$City <- str_replace(all_years_clean$City, 'INDEDPENDENCE','INDEPENCDENCE')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITY MO','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITY MISSOURI','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITY MISSOURI USA','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSASS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KASAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSSA','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSASA','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSASAS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSASCITY','KANSAS CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSASS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'KANSS','KANSAS')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CI TY','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'CITY USA','CITY')
+all_years_clean$City <- str_replace(all_years_clean$City, 'INDEPENCDENCE','INDEPENDENCE')
+
+```
+```{r}
+cities <- table(all_years_clean$City)
+cities_to_delete <- list('ATHOL','ANN ARBOR','BOONVILLE','BOONEVILLE','BOWLING GREED','BRADENTON','BRATTLEBORO','CAMERON','CHICAGO','CEDAR HILL','CARUTHERSVILLE','CAPE CANAVERAL','CLEARWATER','CLINTON','COLORADO SPRINGS','COLUMBIA','COWGILL','DESERT HOT SPRINGS','DODGE CITY','EDWARDSVILLE','EL DORADO SPRINGS','EMPORIA','FARMINGTON','FLORRISSANT','FORT PIERCE','FULTON','GALENA','GOFF','GRAVOIS MILL','GUEYDAN','HARRISON','HUMANSVILLE','JEFFERSON CITY','WICHITA','WARSAW','VANDALIA','UNK','UNION','TULSA','TOMPKINS','ST. JOSEPH','ST JOSEPH','ST. LOUIS','ST CHARLES','ST SEPH','TULSA, OK','SPRINGFIELD','SAN ANTONIO','SEDALIA','ROSAMOND','RICHMOND','PLATTSBURG','PLATTESBURG','PLATSBURG','PACIFIC','OMAHA','NORTH BEACH MIAMI','NASHVILLE','MURPHYSBORO','MOBERLY','MEXICO','MILLS','LOS ANGELES','LONGBEACH','LITTLETON','LITTLE ROCK','LICKING','LEXINGTON','LAS VEGAS','LANSING','LAKELAND','KINGSTON','KINGSVILLE','AUSTIN','BOLINGBROOK','CENTERVIEW','FLORISSANT','HIGGINSVILLE')
+
+all_years_clean <- all_years_clean %>% filter(!City %in% cities_to_delete)
+```
+peeking at the addresses in the dataset and where we have huge clusters of incidents
+
+```{r}
+addresses <- table(all_years_clean$Address)
+addresses <- addresses[order(addresses, decreasing=TRUE)]
+```
+
+let's do some fun string replacement for the address field
+```{r}
+all_years_clean$Address <- str_replace(all_years_clean$Address, ' HWY$',' HW')
+all_years_clean$Address <- str_replace(all_years_clean$Address, ' STR$',' ST')
+all_years_clean$Address <- str_replace(all_years_clean$Address, ' AVE$',' AV')
+all_years_clean$Address <- str_replace(all_years_clean$Address, ' PKWY$',' PK')
+all_years_clean$Address <- str_replace(all_years_clean$Address, '  ',' ')
+all_years_clean$Address <- str_replace(all_years_clean$Address, ' US 40 HWY E',' US 40 HW')
+all_years_clean$Address <- str_replace(all_years_clean$Address, ' TE$',' TER')
+```
+```{r}
+addresses <- sort(addresses)
+```
+
+lauren needs the Address field to have & instead of 'and' for the block intersections for mapping:
+```{r}
+all_years_clean$Address <- str_replace(all_years_clean$Address, ' and ' , ' & ')
+```
+
+
+```{r}
+missing_crime <- subset(all_years_clean, select= c(Offense, Description, IBRS, missing_IBRS, missing_description))
+missing_crime <- filter(missing_crime, missing_IBRS == TRUE | missing_description == TRUE)
+```
+
+```{r}
+missing_crime %>%
+  count(Description)
+```
+
+```{r}
+missing_crime2 <- subset(all_years_clean, select= c(Offense, Description, IBRS, missing_IBRS, missing_description, year))
+missing_crime2 <- filter(missing_crime2, missing_IBRS == TRUE & missing_description == TRUE)
+```
+
+```{r}
+missing_crime2 %>%
+  count(Offense)
+```
+
+Step 1: missing data. we are missing ~29k rows of EITHER description of crime OR NIBRS code. but we do have a plain text field that we can use to guess at some of them. my inclination is to try to recode the ones that would qualify as Part I crimes and discard the part II ones. Jordan has okayed this approach.
+09A - Murder and Nonnegligent Manslaughter
+09B - Negligent Manslaughter
+11A - Rape
+120 - Robbery
+13A - Aggravated Assault
+220 - Burglary/Breaking & Entering
+23A-23H - Larceny-theft
+240 - Motor Vehicle Theft
+200 - Arson
+64A - Human Trafficking-Commercial Sex Acts
+64B - Human Trafficking-Involuntary Servitude
+
+```{r}
+all_years_clean2 <- all_years_clean %>%
+  mutate(IBRS = case_when(
+    grepl('Murder', Offense) ~ '09A',
+    grepl('(Aggravated)', Offense) ~ '13A',
+    grepl('Rape', Offense) ~ '11A',
+    grepl('Robbery', Offense) ~ '120',
+    grepl('Arson', Offense) ~ '200',
+    grepl('Burglary', Offense) ~ '220',
+    grepl('Commercial Sex Acts', Offense) ~ '64A',
+    grepl('Involuntary Servitude', Offense) ~ '64B',
+    grepl('Stealing', Offense) ~ '23A',
+    grepl('Stolen Auto', Offense) ~ '240',
+    TRUE ~ IBRS))
+```
+
+```{r}
+all_years_clean2 <- all_years_clean2[!is.na(all_years_clean2$IBRS),]
+```
+
+This removed all rows with missing IBRS so now our dataset has only crimes with NIBRS codes. 
+```{r}
+all_years_clean2 %>%
+  count(Offense)
+```
+removing just a few more things that seem inappropriate to this dataset. Suicides, warrants
+```{r}
+all_years_clean2 <- all_years_clean2[-grep('Suicide', all_years_clean2$Offense),]
+```
+```{r}
+all_years_clean2 <- all_years_clean2[-grep('Warrant', all_years_clean2$Offense),]
+```
+
+
+```{r}
+cleaned_split <- all_years_clean2[order(all_years_clean2$Report_No, all_years_clean2$IBRS),]
+```
+
+```{r}
+partI_codes <- list('09A','09B','11A','120','13A','220','23A','23B','23C','23D','23E','23F','23G','23H','240','200','64A','64B')
+
+cleaned_split$partIcrime_flag <- as.numeric(cleaned_split$IBRS %in% partI_codes)
+
+cleaned_split <- cleaned_split %>%
+        group_by(Report_No) %>%
+        mutate(part_filter = sum(partIcrime_flag))
+```
+there are some rows with multiple part I crimes under the same report no. in order to more closely match the UCR methodology, we need to select only one of these following the heirarchy as listed a few chunks above here. if there are multiple rows with the same NIBRS code we'll just take one of them. 
+
+```{r}
+partI_checking <- subset(cleaned_split, cleaned_split$part_filter > 1)
+partI_checking <- partI_checking[order(partI_checking$IBRS, partI_checking$Reported_Date, partI_checking$Report_No),] 
+partI_checking <- partI_checking %>%
+  distinct(Report_No, Reported_Date, IBRS, .keep_all=TRUE)
+```
+sorting by IBRS conveniently puts it in the correct heirarchical order. selecting distinct based on the same report number and day but only keeping the first row (the 'worst' part I crime)
+```{r}
+partI_checking <- partI_checking %>%
+  distinct(Report_No, Reported_Date, .keep_all=TRUE)
+```
+next selecting the single part I incident per incident PER MONTH because that's the actual UCR summary thing. 
+```{r}
+partI_checking <- partI_checking %>%
+  distinct(Report_No, month, .keep_all=TRUE)
+```
+
+okay this all looks good, so we are going to replicate these steps in the main dataset to get down to the rows that we want to keep. 
+
+```{r}
+heirarchy_to_remove <- subset(cleaned_split, cleaned_split$part_filter > 1)
+heirarchy_to_remove <- dplyr::anti_join(heirarchy_to_remove, partI_checking)
+needs_geocodes <- dplyr::anti_join(cleaned_split, heirarchy_to_remove)
+needs_geocodes <- ungroup(needs_geocodes)
+```
+
+This is pretty damn good! We have a dataset that needs geocoding but should only include the crimes that we want (more or less, might still need to remove some things outside of KC proper). 
+
+some more minor cleaning up of the variables: 
+```{r}
+needs_geocodes <- subset(needs_geocodes, select= -c(missing_IBRS, missing_description, missing_location, missing_address, missing_bothIBRSDescription, part_filter, Firearm.Used.Flag, DVFlag))
+```
+
+splitting out old geocoding info to leave just the address blocks to hopefully make lauren's life a little easier
+
+```{r}
+needs_geocodes <- needs_geocodes %>% separate_wider_delim(Location, delim='\n', names=c("st",'city_state','coords'), too_few='align_start', cols_remove=FALSE)
+```
+
+saving current version that needs to be geocoded:
+```{r}
+write.csv(needs_geocodes, "to_be_geocoded.csv", row.names=FALSE)
+```
+
+
+
