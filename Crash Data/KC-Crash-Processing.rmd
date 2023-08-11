@@ -1,0 +1,47 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+this notebook is meant to be used on the combined missouri crash data from 2017-2022 with the purpose of creating block group level variables for pedestrian/crash incidents.
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(naniar)
+library(crosstable)
+library(stringr)
+library(tidyr)
+```
+```{r}
+crash2017 <- read.csv("Crash Data/MO Crash Data_2017.csv")
+crash2018 <- read.csv("Crash Data/MO Crash data_2018.csv")
+crash2019 <- read.csv("Crash Data/MO Crash Data_2019.csv")
+crash2020 <- read.csv("Crash Data/MO Crash Data_2020.csv")
+crash2021 <- read.csv("Crash Data/MO Crash Data_2021.csv")
+crash2022 <- read.csv("Crash Data/MO Crash Data_2022.csv")
+```
+```{r}
+all_crash <- bind_rows(crash2017, crash2018, crash2019, crash2020, crash2021, crash2022)
+```
+```{r}
+gg_miss_var(all_crash)
+```
+there is no missing data in this dataset! what a beautiful clean piece of business
+```{r}
+cities <- table(all_crash$City)
+```
+question: what places do we remove from this analysis? is kansas data not part of this work, i don't remember?
+
+```{r}
+table(all_crash$Type)
+```
+```{r}
+table(all_crash$Severity)
+```
+
+likely going to need to remove some of the superfluous information in the address columns so that lauren can map the intersections more successfully, but i'm not 100% sure yet. she is going to test out the geocoding and see what is important to change and what isn't. 
+```{r}
+all_crash <- str_replace(all_crash$On.Street, "CST ", "")
+all_crash <- str_replace(all_crash$At.Street, "CST ", "")
+
+```

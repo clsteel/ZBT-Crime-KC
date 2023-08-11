@@ -16,20 +16,20 @@ In order to use this notebook ensure that the Crime Data files are in the same d
 ```{r}
 library(dplyr)
 library(ggplot2)
-#library(naniar)
-#library(crosstable)
+library(naniar)
+library(crosstable)
 library(stringr)
 library(tidyr)
 ```
 
 ```{r}
 setwd('C:/Users/clfairbairn/Projects_Local/ZBT Crime Data/Kansas City, MO')
-kc_2017 <-  read.csv('KCPD_Crime_Data_2017.csv')
-kc_2018 <-  read.csv('KCPD_Crime_Data_2018.csv')
-kc_2019 <-  read.csv('KCPD_Crime_Data_2019.csv')
-kc_2020 <-  read.csv('KCPD_Crime_Data_2020.csv')
-kc_2021 <-  read.csv('KCPD_Crime_Data_2021.csv')
-kc_2022 <-  read.csv('KCPD_Crime_Data_2022.csv')
+kc_2017 <-  read.csv('data/KCPD_Crime_Data_2017.csv')
+kc_2018 <-  read.csv('data/KCPD_Crime_Data_2018.csv')
+kc_2019 <-  read.csv('data/KCPD_Crime_Data_2019.csv')
+kc_2020 <-  read.csv('data/KCPD_Crime_Data_2020.csv')
+kc_2021 <-  read.csv('data/KCPD_Crime_Data_2021.csv')
+kc_2022 <-  read.csv('data/KCPD_Crime_Data_2022.csv')
 ```
 
 Exploring the data:
@@ -94,7 +94,7 @@ all_years_clean <- filter(all_years_clean, year <= 2022)
 lost about 200 observations from that filter
 
 ```{r}
-#gg_miss_var(all_years_clean)
+gg_miss_var(all_years_clean)
 ```
 suspicious lack of missingness in most vars--set empty strings to NA to count actual missing data and also drop some variables that we aren't going to use in analysis  
 
@@ -103,7 +103,7 @@ all_years_clean[all_years_clean == ''] <- NA
 all_years_clean <- subset(all_years_clean, select= -c(Age_Range, Beat, Rep_Dist, From_Time, From_Date, To_Time, To_Date, Invl_No))
 ```
 ```{r}
-#gg_miss_var(all_years_clean, facet=year)
+gg_miss_var(all_years_clean, facet=year)
 ```
 Unfortunately the most missing variables are the most important ones: description, location, IBRS
 ```{r}
@@ -125,11 +125,7 @@ all_years_clean <- all_years_clean %>%
   distinct(Report_No, Address, Reported_Date, Reported_Time, .keep_all=TRUE)
 all_years_clean$Description <- toupper(all_years_clean$Description)
 ```
-```{r}
-sum(duplicated(needs_geocodes$Report_No))
-```
-
-This removed roughly half the dataset which seems pretty good. many dupes were suspect/victim pairs of the same report. 
+This removed roughly half the dataset which seems pretty good. many dupes were suspect/victim pairs of the same report.
 
 Looking at some missing data crosstabs
 ```{r}
@@ -142,7 +138,7 @@ all_years_clean$missing_bothIBRSDescription <- ifelse(all_years_clean$missing_IB
 
 
 ```{r}
-#crosstable(all_years_clean, (missing_address), by=missing_location)
+crosstable(all_years_clean, (missing_address), by=missing_location)
 ```
 
 **33,439 rows have neither IBRS nor description
@@ -361,39 +357,41 @@ cleaned_split <- cleaned_split %>%
         group_by(Report_No) %>%
         mutate(part_filter = sum(partIcrime_flag))
 ```
-there are some rows with multiple part I crimes under the same report no. in order to more closely match the UCR methodology, we need to select only one of these following the heirarchy as listed a few chunks above here. if there are multiple rows with the same NIBRS code we'll just take one of them. 
+there are some rows with multiple part I crimes under the same report no. in order to more closely match the UCR methodology, we need to select only one of these following the heirarchy as listed a few chunks above here. if there are multiple rows with the same NIBRS code we'll just take one of them.
+
+ACTUALLY NO. the kc data switched sytems in april of 2019 so the only duplicate report numbers are in the first two years and change of the dataset. these are already summarized and are different in place and time, so will be kept in the dataset.
 
 ```{r}
-partI_checking <- subset(cleaned_split, cleaned_split$part_filter > 1)
-partI_checking <- partI_checking[order(partI_checking$IBRS, partI_checking$Reported_Date, partI_checking$Report_No),] 
-partI_checking <- partI_checking %>%
-  distinct(Report_No, Reported_Date, IBRS, .keep_all=TRUE)
+# partI_checking <- subset(cleaned_split, cleaned_split$part_filter > 1)
+# partI_checking <- partI_checking[order(partI_checking$IBRS, partI_checking$Reported_Date, partI_checking$Report_No),]
+# partI_checking <- partI_checking %>%
+#   distinct(Report_No, Reported_Date, IBRS, .keep_all=TRUE)
 ```
-sorting by IBRS conveniently puts it in the correct heirarchical order. selecting distinct based on the same report number and day but only keeping the first row (the 'worst' part I crime)
+sorting by IBRS conveniently puts it in the correct hierarchical order. selecting distinct based on the same report number and day but only keeping the first row (the 'worst' part I crime)
 ```{r}
-partI_checking <- partI_checking %>%
-  distinct(Report_No, Reported_Date, .keep_all=TRUE)
+# partI_checking <- partI_checking %>%
+#   distinct(Report_No, Reported_Date, Reported_Time, .keep_all=TRUE)
 ```
 next selecting the single part I incident per incident PER MONTH because that's the actual UCR summary thing. 
 ```{r}
-partI_checking <- partI_checking %>%
-  distinct(Report_No, month, .keep_all=TRUE)
+# partI_checking <- partI_checking %>%
+#   distinct(Report_No, month, .keep_all=TRUE)
 ```
 
 okay this all looks good, so we are going to replicate these steps in the main dataset to get down to the rows that we want to keep. 
 
 ```{r}
-heirarchy_to_remove <- subset(cleaned_split, cleaned_split$part_filter > 1)
-heirarchy_to_remove <- dplyr::anti_join(heirarchy_to_remove, partI_checking)
-needs_geocodes <- dplyr::anti_join(cleaned_split, heirarchy_to_remove)
-needs_geocodes <- ungroup(needs_geocodes)
+# heirarchy_to_remove <- subset(cleaned_split, cleaned_split$part_filter > 1)
+# heirarchy_to_remove <- dplyr::anti_join(heirarchy_to_remove, partI_checking)
+# needs_geocodes <- dplyr::anti_join(cleaned_split, heirarchy_to_remove)
+# needs_geocodes <- ungroup(needs_geocodes)
 ```
 
 This is pretty damn good! We have a dataset that needs geocoding but should only include the crimes that we want (more or less, might still need to remove some things outside of KC proper). 
 
 some more minor cleaning up of the variables: 
 ```{r}
-needs_geocodes <- subset(needs_geocodes, select= -c(missing_IBRS, missing_description, missing_location, missing_address, missing_bothIBRSDescription, part_filter, Firearm.Used.Flag, DVFlag))
+needs_geocodes <- subset(cleaned_split, select= -c(missing_IBRS, missing_description, missing_location, missing_address, missing_bothIBRSDescription, part_filter, Firearm.Used.Flag, DVFlag))
 ```
 
 splitting out old geocoding info to leave just the address blocks to hopefully make lauren's life a little easier
@@ -407,5 +405,60 @@ saving current version that needs to be geocoded:
 write.csv(needs_geocodes, "to_be_geocoded.csv", row.names=FALSE)
 ```
 
+for part I crimes we will make our two variables that are crimes against persons vs property
 
+for part II crimes we will try to do the same thing--maybe group 'A' vs group "B"
 
+after lauren does the geocoding we will be able to identify clusters and decide what to do with those. in the meantime i will try to create the flags for persons/property so that we can sum them up per block group later on.
+Personal Crime
+    Murder
+    Rape
+    Robbery
+    Assault
+Property Crime
+    Burglary
+    Larceny
+    Motor Vehicle Theft
+
+crimerisk methodology does NOT include arson or human trafficking but i might just add them to these columns for fun (arson to property and trafficking to personal)
+
+```{r}
+needs_geocodes <- needs_geocodes %>%
+    mutate(partI_personal = case_when(
+      grepl("09A", IBRS) ~ 1,
+      grepl("09B", IBRS) ~ 1,
+      grepl("11A", IBRS) ~ 1,
+      grepl('120', IBRS) ~ 1,
+      grepl('13A', IBRS) ~ 1,
+      grepl('64A', IBRS) ~ 1,
+      grepl('64B', IBRS) ~ 1,
+      TRUE ~ 0))
+
+needs_geocodes <- needs_geocodes %>%
+  mutate(partI_property = case_when(
+    grepl("220", IBRS) ~ 1,
+    grepl("23*", IBRS) ~ 1,
+    grepl("240", IBRS) ~ 1,
+    grepl('200', IBRS) ~ 1,
+    TRUE ~ 0))
+```
+```{r}
+needs_geocodes <- needs_geocodes %>%
+  mutate(partII_society = case_when(
+    grepl("250", IBRS) ~ 1,
+    grepl('270', IBRS) ~ 1,
+    grepl('26*', IBRS) ~ 1,
+    grepl('280', IBRS) ~ 1,
+    grepl('290', IBRS) ~ 1,
+    grepl('35A', IBRS) ~ 1,
+    grepl('35B', IBRS) ~ 1,
+    grepl('370', IBRS) ~ 1,
+    grepl('39C', IBRS) ~ 1,
+    grepl('40A', IBRS) ~ 1,
+    grepl('520', IBRS) ~ 1,
+    grepl('510', IBRS) ~ 1,
+    grepl('64*', IBRS) ~ 1,
+    grepl('720', IBRS) ~ 1,
+    #grepl('90*', IBRS) ~ 1,
+    TRUE ~ 0))
+```
