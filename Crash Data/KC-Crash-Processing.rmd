@@ -11,6 +11,7 @@ library(naniar)
 library(crosstable)
 library(stringr)
 library(tidyr)
+library(caret)
 ```
 ```{r}
 crash2017 <- read.csv("Crash Data/MO Crash Data_2017.csv")
@@ -35,8 +36,23 @@ question: what places do we remove from this analysis? is kansas data not part o
 ```{r}
 table(all_crash$Type)
 ```
+per jordan we are going to use five categories out of this list:
+pedestrian
+pedalcycle
+motor vehicle in transport
+fixed object
+parked motor vehicle
+```{r}
+list_of_types <- c('Parked Motor Vehicle','Pedestrian','Pedalcycle','Fixed Object','Motor Vehicle in Transport')
+crash_cleaned <- filter(all_crash, all_crash$Type %in% list_of_types)
+```
+
 ```{r}
 table(all_crash$Severity)
+```
+going to one hot encode this var to create flags for each type of severity for counting later on after geocoding is done
+```{r}
+crash_cleaned <- crash_cleaned %>% mutate(value=1) %>% spread(Severity, value, fill=0)
 ```
 
 likely going to need to remove some of the superfluous information in the address columns so that lauren can map the intersections more successfully, but i'm not 100% sure yet. she is going to test out the geocoding and see what is important to change and what isn't. 
